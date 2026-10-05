@@ -1,0 +1,103 @@
+{# Threat Intelligence Lookup — manual VirusTotal lookup interface for IPs and file hashes. Uses the live API for general indicators and bundled mock data for the training-scenario IPs. #}
+{% extends "base.html" %}
+{% block title %}Threat Intelligence{% endblock %}
+
+{% block content %}
+<h5 class="mb-3">Threat Intelligence Lookup</h5>
+
+<!-- Search Form -->
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <form method="POST" class="row g-2 align-items-end">
+            <div class="col-md-2">
+                <label class="form-label small text-muted">Type</label>
+                <select name="lookup_type" class="form-select form-select-sm bg-dark text-light border-secondary">
+                    <option value="ip" {% if lookup_type == 'ip' %}selected{% endif %}>IP Address</option>
+                    <option value="hash" {% if lookup_type == 'hash' %}selected{% endif %}>File Hash</option>
+                </select>
+            </div>
+            <div class="col-md-8">
+                <label class="form-label small text-muted">Indicator</label>
+                <input type="text" name="indicator" class="form-control form-control-sm bg-dark text-light border-secondary font-monospace"
+                       placeholder="Enter IP or hash..." value="{{ indicator or '' }}">
+            </div>
+            <div class="col-md-2">
+                <button type="submit" class="btn btn-info btn-sm w-100"><i class="bi bi-search me-1"></i>Lookup</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Results -->
+{% if result and not result.error is defined %}
+<div class="card">
+    <div class="card-header py-2">
+        <small class="fw-bold">Results for <code>{{ indicator }}</code></small>
+        <span class="badge bg-dark border border-secondary ms-1 small">{{ result.source }}</span>
+    </div>
+    <div class="card-body py-2">
+        <!-- Detection Stats -->
+        <div class="row g-2 mb-2 text-center">
+            <div class="col-3">
+                <span class="fs-4 fw-bold text-danger">{{ result.malicious }}</span>
+                <div class="text-muted small">Malicious</div>
+            </div>
+            <div class="col-3">
+                <span class="fs-4 fw-bold text-warning">{{ result.suspicious }}</span>
+                <div class="text-muted small">Suspicious</div>
+            </div>
+            <div class="col-3">
+                <span class="fs-4 fw-bold text-success">{{ result.harmless }}</span>
+                <div class="text-muted small">Harmless</div>
+            </div>
+            <div class="col-3">
+                <span class="fs-4 fw-bold text-secondary">{{ result.undetected }}</span>
+                <div class="text-muted small">Undetected</div>
+            </div>
+        </div>
+
+        <!-- Progress Bar -->
+        {% set total = result.malicious + result.suspicious + result.harmless + result.undetected %}
+        {% if total > 0 %}
+        <div class="progress mb-2" style="height:8px;">
+            <div class="progress-bar bg-danger" style="width:{{ (result.malicious/total*100)|round }}%"></div>
+            <div class="progress-bar bg-warning" style="width:{{ (result.suspicious/total*100)|round }}%"></div>
+            <div class="progress-bar bg-success" style="width:{{ (result.harmless/total*100)|round }}%"></div>
+        </div>
+        {% endif %}
+
+        <!-- Verdict -->
+        {% if result.malicious > 10 %}
+        <div class="alert alert-danger py-1 small mb-2">
+            <i class="bi bi-exclamation-octagon-fill me-1"></i><strong>MALICIOUS</strong> — Flagged by {{ result.malicious }} security vendors.
+        </div>
+        {% elif result.malicious > 0 %}
+        <div class="alert alert-warning py-1 small mb-2">
+            <i class="bi bi-exclamation-triangle me-1"></i><strong>SUSPICIOUS</strong> — {{ result.malicious }} malicious detections found.
+        </div>
+        {% else %}
+        <div class="alert alert-success py-1 small mb-2">
+            <i class="bi bi-check-circle me-1"></i><strong>CLEAN</strong> — No malicious detections.
+        </div>
+        {% endif %}
+
+        <!-- Extra Details -->
+        {% if result.country is defined %}
+        <div class="small text-muted">
+            Country: <strong class="text-light">{{ result.country }}</strong> &middot;
+            Owner: <strong class="text-light">{{ result.as_owner }}</strong> &middot;
+            Reputation: <strong class="{% if result.reputation < -50 %}text-danger{% else %}text-warning{% endif %}">{{ result.reputation }}</strong>
+        </div>
+        {% endif %}
+        {% if result.type_description is defined %}
+        <div class="small text-muted">
+            Type: <strong class="text-light">{{ result.type_description }}</strong> &middot;
+            Name: <strong class="text-light font-monospace">{{ result.meaningful_name }}</strong>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% elif result and result.error is defined %}
+<div class="alert alert-danger small">{{ result.error }}</div>
+{% endif %}
+{% endblock %}

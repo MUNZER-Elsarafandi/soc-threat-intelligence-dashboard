@@ -1,0 +1,134 @@
+{# Main Dashboard — alert statistics, personal performance, severity & MITRE ATT&CK charts, plus a list of recent Critical/High alerts. #}
+{% extends "base.html" %}
+{% block title %}SOC Dashboard{% endblock %}
+
+{% block content %}
+<div class="row g-2 mb-3">
+    <div class="col-6 col-md-3">
+        <div class="card text-center py-2"><div class="text-muted small">Total Alerts</div><div class="fs-3 fw-bold">{{ stats.total }}</div></div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center py-2"><div class="text-muted small">Awaiting Action</div><div class="fs-3 fw-bold text-danger">{{ stats.awaiting }}</div></div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center py-2"><div class="text-muted small">In Progress</div><div class="fs-3 fw-bold text-warning">{{ stats.in_progress }}</div></div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center py-2"><div class="text-muted small">Closed</div><div class="fs-3 fw-bold text-success">{{ stats.closed }}</div></div>
+    </div>
+</div>
+
+{# Personal performance row — only shown if user has at least one attempt #}
+{% if user_stats.total_attempts > 0 %}
+<div class="row g-2 mb-3">
+    <div class="col-6 col-md-3">
+        <div class="card text-center py-2 border-info"><div class="text-muted small">Your Accuracy</div><div class="fs-3 fw-bold text-info">{{ user_stats.accuracy }}%</div></div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center py-2 border-success"><div class="text-muted small">Correct Decisions</div><div class="fs-3 fw-bold text-success">{{ user_stats.correct_decisions }}</div></div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center py-2 border-warning"><div class="text-muted small">Avg Response Time</div><div class="fs-3 fw-bold text-warning">{{ user_stats.avg_time }}s</div></div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center py-2"><div class="text-muted small">Total Attempts</div><div class="fs-3 fw-bold">{{ user_stats.total_attempts }}</div></div>
+    </div>
+</div>
+{% endif %}
+
+{# Two charts in fixed-height containers (Chart.js requires this for responsiveness) #}
+<div class="row g-2 mb-3">
+    <div class="col-md-4">
+        <div class="card p-2">
+            <h6 class="text-muted small mb-1">Severity</h6>
+            <div style="height:280px;">
+                <canvas id="severityChart"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-8">
+        <div class="card p-2">
+            <h6 class="text-muted small mb-1">MITRE ATT&CK Tactics</h6>
+            <div style="height:280px;">
+                <canvas id="mitreChart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+{# Recent Critical/High alerts list — top 8 by date #}
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center py-2">
+        <span class="small fw-bold">Recent Critical & High Alerts</span>
+        <a href="{{ url_for('alerts_list') }}" class="btn btn-sm btn-outline-info">View All</a>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-dark table-hover table-sm mb-0">
+            <thead><tr><th>Alert</th><th>Severity</th><th>Status</th><th>Verdict</th><th>Assignee</th><th></th></tr></thead>
+            <tbody>
+                {% for alert in recent_alerts %}
+                <tr>
+                    <td>{{ alert.title }}</td>
+                    <td><span class="badge bg-{{ alert.severity_color() }}">{{ alert.severity }}</span></td>
+                    <td><span class="badge bg-{{ alert.status_color() }}">{{ alert.status }}</span></td>
+                    <td>{% if alert.verdict != 'None' %}<span class="badge bg-{{ alert.verdict_color() }}">{{ alert.verdict }}</span>{% else %}<span class="text-muted small">None</span>{% endif %}</td>
+                    <td class="small">{{ alert.assignee if alert.assignee != 'None' else '' }}</td>
+                    <td><a href="{{ url_for('alert_detail', alert_id=alert.id) }}" class="btn btn-outline-info btn-sm py-0 px-1"><i class="bi bi-eye"></i></a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+{# ----- Severity doughnut chart ----- #}
+new Chart(document.getElementById('severityChart'), {
+    type: 'doughnut',
+    data: {
+        labels: ['Critical','High','Medium','Low'],
+        datasets: [{
+            data: [{{ stats.critical }},{{ stats.high }},{{ stats.medium }},{{ stats.low }}],
+            backgroundColor: ['#dc3545','#ffc107','#0dcaf0','#6c757d'],
+            borderWidth: 0
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: { position: 'right', labels: { color: '#adb5bd', boxWidth: 10, padding: 6, font: { size: 10 } } }
+        }
+    }
+});
+
+{# ----- MITRE ATT&CK horizontal bar chart with one colour per tactic ----- #}
+new Chart(document.getElementById('mitreChart'), {
+    type: 'bar',
+    data: {
+        labels: {{ mitre_labels|tojson }},
+        datasets: [{
+            data: {{ mitre_counts|tojson }},
+            backgroundColor: [
+                '#dc3545', '#fd7e14', '#ffc107', '#20c997',
+                '#0dcaf0', '#6f42c1', '#d63384', '#0d6efd', '#198754'
+            ],
+            borderRadius: 4,
+            barThickness: 18
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: 'y',
+        plugins: { legend: { display: false } },
+        scales: {
+            x: { ticks: { color: '#adb5bd', stepSize: 1, font: { size: 10 } }, grid: { color: '#333' } },
+            y: { ticks: { color: '#adb5bd', font: { size: 9 } }, grid: { display: false } }
+        }
+    }
+});
+</script>
+{% endblock %}

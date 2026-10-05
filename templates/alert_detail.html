@@ -1,0 +1,338 @@
+{# =============================================================
+   Alert Detail Page — the main analyst workspace.
+   Displays a single alert with its evidence, threat-intel results,
+   MITRE ATT&CK context, the analysis quiz, and the triage workflow
+   panel that lets the analyst submit a verdict and escalation
+   decision. Includes a stopwatch, confetti animation, and Web Audio
+   API sound effects to make the learning experience engaging.
+   ============================================================= #}
+{% extends "base.html" %}
+{% block title %}Alert #{{ alert.id }}{% endblock %}
+
+{% block content %}
+{# Full-screen canvas used by the JS confetti animation #}
+<canvas id="confetti-canvas" style="position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:9999;"></canvas>
+
+<a href="{{ url_for('alerts_list') }}" class="text-info text-decoration-none small mb-2 d-inline-block">
+    <i class="bi bi-arrow-left me-1"></i>Back to Alerts
+</a>
+
+{# ---------- Alert header: title + severity / difficulty / status badges ---------- #}
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <div class="d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">{{ alert.title }}</h5>
+            <div class="d-flex gap-1 align-items-center">
+                <span class="badge bg-{{ alert.severity_color() }}">{{ alert.severity }}</span>
+                <span class="badge bg-{{ alert.difficulty_color() }}">{{ alert.difficulty }}</span>
+                <span class="badge bg-{{ alert.status_color() }}">{{ alert.status }}</span>
+                {% if alert.status == 'In Progress' and alert.verdict == 'None' %}
+                <span class="badge bg-dark border border-info" id="timer-badge"><i class="bi bi-stopwatch me-1"></i><span id="timer-display">00:00</span></span>
+                {% endif %}
+                {% if alert.verdict != 'None' %}
+                <span class="badge bg-{{ alert.verdict_color() }}">
+                    {% if alert.verdict == 'True Positive' %}<i class="bi bi-check-lg me-1"></i>{% else %}<i class="bi bi-x-lg me-1"></i>{% endif %}{{ alert.verdict }}
+                </span>
+                {% endif %}
+                {% if alert.assignee != 'None' %}<span class="badge bg-dark border border-secondary">{{ alert.assignee }}</span>{% endif %}
+            </div>
+        </div>
+        <p class="text-muted small mt-2 mb-0">{{ alert.description }}</p>
+    </div>
+</div>
+
+<div class="row g-3">
+    {# ===== LEFT COLUMN: alert evidence, VT, MITRE, quiz ===== #}
+    <div class="col-lg-8">
+
+        {# Evidence panel: parsed from JSON in alert.details (sender, IPs, security checks, etc.) #}
+        {% if details %}
+        <div class="card mb-3">
+            <div class="card-header py-2"><small class="fw-bold"><i class="bi bi-file-earmark-text me-1"></i>Alert Evidence</small></div>
+            <div class="card-body py-2">
+                <table class="table table-dark table-sm mb-0">
+                    <tbody>
+                        {% for key, value in details.items() %}
+                        <tr>
+                            <td class="text-muted fw-bold" style="width:180px;">{{ key|replace('_', ' ')|title }}:</td>
+                            <td class="{% if 'Fail' in value|string or 'malicious' in value|string|lower %}text-danger{% elif 'Pass' in value|string %}text-success{% else %}text-light{% endif %} small">{{ value }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        {# VirusTotal panel: detection counts, country, ASN owner, reputation #}
+        {% if vt_data and not vt_data.get('error') %}
+        <div class="card mb-3">
+            <div class="card-header py-2">
+                <small class="fw-bold">VirusTotal Results</small>
+                <span class="badge bg-dark border border-secondary ms-1 small">{{ vt_data.source }}</span>
+            </div>
+            <div class="card-body py-2">
+                <div class="row g-2 mb-2 text-center">
+                    <div class="col-3"><span class="fs-4 fw-bold text-danger">{{ vt_data.malicious }}</span><div class="text-muted small">Malicious</div></div>
+                    <div class="col-3"><span class="fs-4 fw-bold text-warning">{{ vt_data.suspicious }}</span><div class="text-muted small">Suspicious</div></div>
+                    <div class="col-3"><span class="fs-4 fw-bold text-success">{{ vt_data.harmless }}</span><div class="text-muted small">Harmless</div></div>
+                    <div class="col-3"><span class="fs-4 fw-bold text-secondary">{{ vt_data.undetected }}</span><div class="text-muted small">Undetected</div></div>
+                </div>
+                {% set total = vt_data.malicious + vt_data.suspicious + vt_data.harmless + vt_data.undetected %}
+                {% if total > 0 %}
+                <div class="progress mb-2" style="height:8px;">
+                    <div class="progress-bar bg-danger" style="width:{{ (vt_data.malicious/total*100)|round }}%"></div>
+                    <div class="progress-bar bg-warning" style="width:{{ (vt_data.suspicious/total*100)|round }}%"></div>
+                    <div class="progress-bar bg-success" style="width:{{ (vt_data.harmless/total*100)|round }}%"></div>
+                </div>
+                {% endif %}
+                {% if vt_data.get('country') %}<div class="small text-muted">Country: <strong class="text-light">{{ vt_data.country }}</strong> · Owner: <strong class="text-light">{{ vt_data.as_owner }}</strong></div>{% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+        {# MITRE ATT&CK panel: tactic + technique + suggested mitigations #}
+        {% if mitre_tactic or mitre_technique %}
+        <div class="card mb-3">
+            <div class="card-header py-2"><small class="fw-bold">MITRE ATT&CK Mapping</small></div>
+            <div class="card-body py-2">
+                {% if mitre_tactic %}
+                <div class="mb-2">
+                    <span class="badge bg-danger me-1">Tactic</span> <strong>{{ alert.mitre_tactic }}</strong> <span class="text-muted small">({{ mitre_tactic.id }})</span>
+                    <p class="text-muted small mb-0 mt-1">{{ mitre_tactic.description }}</p>
+                </div>
+                {% endif %}
+                {% if mitre_technique %}
+                <div class="{% if mitre_tactic %}border-top border-secondary pt-2 mt-2{% endif %}">
+                    <span class="badge bg-warning text-dark me-1">Technique</span> <strong>{{ alert.mitre_technique_id }}</strong> — {{ mitre_technique.name }}
+                    <p class="text-muted small mb-1 mt-1">{{ mitre_technique.description }}</p>
+                    <p class="small mb-0"><span class="text-success"><i class="bi bi-shield-check me-1"></i>Mitigation:</span> <span class="text-muted">{{ mitre_technique.mitigation }}</span></p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+        {# Quiz panel: per-alert analysis questions with sound + confetti feedback #}
+        {% if questions %}
+        <div class="card mb-3 border-info">
+            <div class="card-header py-2 bg-info bg-opacity-10">
+                <small class="fw-bold"><i class="bi bi-question-circle me-1"></i>Analysis Questions</small>
+                <span class="badge bg-info ms-1" id="score-badge">0 / {{ questions|length }}</span>
+            </div>
+            <div class="card-body py-2">
+                {% for q in questions %}
+                <div class="quiz-question mb-3" id="question-{{ q.id }}" {% if not loop.first %}style="display:none;"{% endif %}>
+                    <p class="small fw-bold mb-2"><span class="badge bg-secondary me-1">Q{{ loop.index }}</span> {{ q.question }}</p>
+                    <div class="d-grid gap-1">
+                        {% for opt in q.options %}
+                        <button class="btn btn-sm btn-outline-light text-start quiz-option" data-question="{{ q.id }}" data-correct="{{ opt.correct|lower }}" data-feedback="{{ opt.feedback }}" onclick="checkAnswer(this)">{{ opt.text }}</button>
+                        {% endfor %}
+                    </div>
+                    <div class="feedback-box mt-2" style="display:none;"></div>
+                    <button class="btn btn-sm btn-info w-100 mt-2 next-btn" style="display:none;" onclick="nextQuestion('{{ q.id }}')">Next Question <i class="bi bi-arrow-right"></i></button>
+                </div>
+                {% endfor %}
+                <div id="quiz-complete" style="display:none;" class="text-center py-3">
+                    <div class="fs-1 mb-2">🎉</div>
+                    <h6 class="text-success">Questions Complete!</h6>
+                    <p class="text-muted small" id="final-score"></p>
+                    <p class="text-muted small">Now make your triage decision in the panel on the right.</p>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    {# ===== RIGHT COLUMN: triage workflow + SOC team panel ===== #}
+    <div class="col-lg-4">
+        <div class="card mb-3 border-info">
+            <div class="card-header py-2 bg-info bg-opacity-10">
+                <small class="fw-bold"><i class="bi bi-person-gear me-1"></i>Triage Workflow</small>
+            </div>
+            <div class="card-body py-2">
+
+                {% if alert.status == 'Awaiting Action' %}
+                <p class="text-muted small mb-2">Assign this alert to yourself to begin triage.</p>
+                <form method="POST" action="{{ url_for('update_alert', alert_id=alert.id) }}">
+                    <input type="hidden" name="action" value="assign">
+                    <button type="submit" class="btn btn-warning btn-sm w-100"><i class="bi bi-person-plus me-1"></i>Assign to Me</button>
+                </form>
+
+                {% elif alert.status == 'In Progress' and alert.verdict != 'None' %}
+                {# State: decision already submitted — show result + Reset & Try Again #}
+                <div class="text-center py-2">
+                    <div class="fs-4 text-info mb-1"><i class="bi bi-check2-circle"></i></div>
+                    <p class="small text-info fw-bold mb-1">Decision Submitted</p>
+                    <div class="small text-muted mb-1">Verdict: <span class="badge bg-{{ alert.verdict_color() }}">{{ alert.verdict }}</span></div>
+                    <div class="small text-muted mb-1">Escalated to: <span class="text-info">{{ alert.assignee }}</span></div>
+                    {% if alert.analyst_comment %}
+                    <div class="text-start mt-2 p-2 rounded bg-dark border border-secondary">
+                        <small class="text-muted d-block mb-1">Comment:</small>
+                        <small class="text-light">{{ alert.analyst_comment }}</small>
+                    </div>
+                    {% endif %}
+                </div>
+                <form method="POST" action="{{ url_for('update_alert', alert_id=alert.id) }}" class="mt-2">
+                    <input type="hidden" name="action" value="reopen">
+                    <button type="submit" class="btn btn-outline-warning btn-sm w-100"><i class="bi bi-arrow-counterclockwise me-1"></i>Reset & Try Again</button>
+                </form>
+
+                {% elif alert.status == 'In Progress' %}
+                <div class="mb-2">
+                    <div class="d-flex justify-content-between small text-muted mb-1">
+                        <span>Analyst:</span><span class="text-info fw-bold">{{ alert.assignee }}</span>
+                    </div>
+                </div>
+                <p class="text-muted small mb-2">Review the evidence and questions, then submit your decision.</p>
+                <form method="POST" action="{{ url_for('update_alert', alert_id=alert.id) }}" onsubmit="document.getElementById('time_spent').value=timerSeconds;">
+                    <input type="hidden" name="action" value="submit_decision">
+                    <input type="hidden" name="time_spent" id="time_spent" value="0">
+                    <input type="hidden" name="quiz_score" id="quiz_score_field" value="0">
+                    <input type="hidden" name="quiz_total" id="quiz_total_field" value="{{ questions|length }}">
+
+                    <div class="mb-2">
+                        <label class="form-label small text-muted mb-1">Verdict</label>
+                        <select name="verdict" class="form-select form-select-sm bg-dark text-light border-secondary" required>
+                            <option value="" disabled selected>— Select Verdict —</option>
+                            <option value="True Positive">True Positive</option>
+                            <option value="False Positive">False Positive</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small text-muted mb-1">Action</label>
+                        <select name="escalate_to" class="form-select form-select-sm bg-dark text-light border-secondary" required>
+                            <option value="" disabled selected>— Select Action —</option>
+                            <option value="close">Close Alert (Handled)</option>
+                            <option value="escalate_l2">Escalate to {{ soc_team.l2_sarah }}</option>
+                            <option value="escalate_manager">Escalate to {{ soc_team.manager }}</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small text-muted mb-1">Analyst Comment</label>
+                        <textarea name="comment" class="form-control form-control-sm bg-dark text-light border-secondary" rows="3" placeholder="Document your analysis...">{{ alert.analyst_comment or '' }}</textarea>
+                    </div>
+
+                    <button type="submit" class="btn btn-success btn-sm w-100"><i class="bi bi-send me-1"></i>Submit Decision</button>
+                </form>
+
+                {% elif alert.status == 'Closed' %}
+                <div class="text-center py-2">
+                    <div class="fs-4 text-success mb-1"><i class="bi bi-check-circle-fill"></i></div>
+                    <p class="small text-success fw-bold mb-1">Alert Closed</p>
+                    <div class="small text-muted mb-1">Verdict: <span class="badge bg-{{ alert.verdict_color() }}">{{ alert.verdict }}</span></div>
+                    <div class="small text-muted mb-1">Handled by: <span class="text-info">{{ alert.assignee }}</span></div>
+                    {% if alert.analyst_comment %}
+                    <div class="text-start mt-2 p-2 rounded bg-dark border border-secondary">
+                        <small class="text-muted d-block mb-1">Comment:</small>
+                        <small class="text-light">{{ alert.analyst_comment }}</small>
+                    </div>
+                    {% endif %}
+                </div>
+                <form method="POST" action="{{ url_for('update_alert', alert_id=alert.id) }}" class="mt-2">
+                    <input type="hidden" name="action" value="reopen">
+                    <button type="submit" class="btn btn-outline-warning btn-sm w-100"><i class="bi bi-arrow-counterclockwise me-1"></i>Reopen & Try Again</button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+
+        {# SOC team panel — shows escalation targets (L1 / L2 / Manager) #}
+        <div class="card mb-3">
+            <div class="card-header py-2"><small class="fw-bold"><i class="bi bi-people me-1"></i>SOC Team</small></div>
+            <div class="card-body py-2">
+                <div class="small">
+                    <div class="d-flex justify-content-between py-1 border-bottom border-secondary">
+                        <span class="text-info">{{ soc_team.l1 }}</span><span class="badge bg-info">L1</span>
+                    </div>
+                    <div class="d-flex justify-content-between py-1 border-bottom border-secondary">
+                        <span class="text-light">{{ soc_team.l2_sarah }}</span><span class="badge bg-warning text-dark">L2</span>
+                    </div>
+                    <div class="d-flex justify-content-between py-1 border-bottom border-secondary">
+                        <span class="text-light">{{ soc_team.l2_omar }}</span><span class="badge bg-warning text-dark">L2</span>
+                    </div>
+                    <div class="d-flex justify-content-between py-1">
+                        <span class="text-light">{{ soc_team.manager }}</span><span class="badge bg-danger">Manager</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Timer
+// ===== Stopwatch =====
+// Counts seconds since the user clicked "Assign to Me".
+// The accumulated value is submitted as a hidden field with the decision form.
+let timerSeconds = 0;
+{% if alert.status == 'In Progress' and alert.verdict == 'None' %}
+const timerInterval = setInterval(() => {
+    timerSeconds++;
+    const m = String(Math.floor(timerSeconds / 60)).padStart(2, '0');
+    const s = String(timerSeconds % 60).padStart(2, '0');
+    const td = document.getElementById('timer-display');
+    if (td) td.textContent = m + ':' + s;
+}, 1000);
+{% endif %}
+
+// Check flash messages for evaluation result
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% for category, message in messages %}
+{% if category == 'success' and 'CORRECT' in message %}
+setTimeout(() => { playCorrectSound(); launchConfetti(); launchConfetti(); flashScreen('#00ff4430'); }, 300);
+{% elif category == 'danger' and 'INCORRECT' in message %}
+setTimeout(() => { playWrongSound(); flashScreen('#ff000030'); }, 300);
+{% endif %}
+{% endfor %}
+{% endwith %}
+
+// Quiz
+let score = 0;
+const totalQ = {{ questions|length if questions else 0 }};
+const qIds = [{% for q in questions %}'{{ q.id }}'{% if not loop.last %},{% endif %}{% endfor %}];
+let ci = 0;
+
+// ===== Quiz logic =====
+// checkAnswer is called when the analyst clicks one of the option buttons.
+// It disables further options, highlights the correct answer, shows the
+// explanation, plays a sound, and updates the running quiz score.
+function checkAnswer(btn) {
+    const qId = btn.dataset.question, ok = btn.dataset.correct === 'true', fb = btn.dataset.feedback;
+    const qDiv = document.getElementById('question-' + qId);
+    qDiv.querySelectorAll('.quiz-option').forEach(b => { b.disabled = true; b.classList.remove('btn-outline-light'); if (b.dataset.correct === 'true') b.classList.add('btn-success'); else if (b === btn && !ok) b.classList.add('btn-danger'); else b.classList.add('btn-outline-secondary'); });
+    const f = qDiv.querySelector('.feedback-box'); f.style.display = 'block';
+    f.className = 'feedback-box mt-2 p-2 rounded small ' + (ok ? 'bg-success bg-opacity-10 text-success' : 'bg-danger bg-opacity-10 text-danger');
+    f.innerHTML = (ok ? '<i class="bi bi-check-circle-fill me-1"></i>' : '<i class="bi bi-x-circle-fill me-1"></i>') + fb;
+    if (ok) { score++; document.getElementById('score-badge').textContent = score + ' / ' + totalQ; playCorrectSound(); launchConfetti(); flashScreen('#00ff4420'); }
+    else { playWrongSound(); flashScreen('#ff000020'); }
+    // Update hidden quiz score field
+    const qsf = document.getElementById('quiz_score_field');
+    if (qsf) qsf.value = score;
+    if (ci < qIds.length - 1) qDiv.querySelector('.next-btn').style.display = 'block';
+    else setTimeout(() => { document.getElementById('quiz-complete').style.display = 'block'; document.getElementById('final-score').textContent = 'You scored ' + score + ' out of ' + totalQ; }, 1200);
+}
+// Hide the current question and show the next one (or the completion message).
+function nextQuestion(id) { document.getElementById('question-' + id).style.display = 'none'; ci++; if (ci < qIds.length) document.getElementById('question-' + qIds[ci]).style.display = 'block'; }
+
+// Effects
+// ===== Visual & audio feedback =====
+// Confetti animation rendered with the HTML5 Canvas API — no external library.
+function launchConfetti() {
+    const c = document.getElementById('confetti-canvas'), x = c.getContext('2d'); c.width = innerWidth; c.height = innerHeight;
+    const p = [], cl = ['#00ff44','#0dcaf0','#ffc107','#ff6b6b','#a855f7','#fff'];
+    for (let i=0;i<80;i++) p.push({x:Math.random()*c.width,y:-20-Math.random()*100,w:6+Math.random()*6,h:4+Math.random()*4,c:cl[Math.floor(Math.random()*cl.length)],vx:(Math.random()-.5)*4,vy:2+Math.random()*4,r:Math.random()*360,s:(Math.random()-.5)*10,o:1});
+    let f=0;(function a(){x.clearRect(0,0,c.width,c.height);let al=false;p.forEach(i=>{if(i.o<=0)return;al=true;i.x+=i.vx;i.y+=i.vy;i.vy+=.1;i.r+=i.s;if(i.y>c.height*.7)i.o-=.02;x.save();x.translate(i.x,i.y);x.rotate(i.r*Math.PI/180);x.globalAlpha=Math.max(0,i.o);x.fillStyle=i.c;x.fillRect(-i.w/2,-i.h/2,i.w,i.h);x.restore();});f++;if(al&&f<120)requestAnimationFrame(a);else x.clearRect(0,0,c.width,c.height);})();
+}
+// Three ascending sine-wave tones played on a correct answer (Web Audio API).
+function playCorrectSound() { try{const a=new(window.AudioContext||window.webkitAudioContext)();[523.25,659.25,783.99].forEach((f,i)=>{const o=a.createOscillator(),g=a.createGain();o.connect(g);g.connect(a.destination);o.frequency.value=f;o.type='sine';g.gain.setValueAtTime(.15,a.currentTime+i*.12);g.gain.exponentialRampToValueAtTime(.001,a.currentTime+i*.12+.4);o.start(a.currentTime+i*.12);o.stop(a.currentTime+i*.12+.4);});}catch(e){} }
+// Single low sawtooth buzz played on a wrong answer.
+function playWrongSound() { try{const a=new(window.AudioContext||window.webkitAudioContext)(),o=a.createOscillator(),g=a.createGain();o.connect(g);g.connect(a.destination);o.frequency.value=200;o.type='sawtooth';g.gain.setValueAtTime(.1,a.currentTime);g.gain.exponentialRampToValueAtTime(.001,a.currentTime+.3);o.start();o.stop(a.currentTime+.3);}catch(e){} }
+// Brief coloured overlay (green/red) for visual feedback on correct/wrong answers.
+function flashScreen(c) { const d=document.createElement('div');d.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;background:'+c+';pointer-events:none;z-index:9998;transition:opacity .5s;';document.body.appendChild(d);setTimeout(()=>d.style.opacity='0',100);setTimeout(()=>d.remove(),600); }
+</script>
+{% endblock %}

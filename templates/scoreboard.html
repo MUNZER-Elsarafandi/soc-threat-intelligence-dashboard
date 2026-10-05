@@ -1,0 +1,115 @@
+{# Scoreboard — personal performance metrics, leaderboard ranking all analysts, and a list of the user's recent triage results. Includes a Download Report link to the PDF view. #}
+{% extends "base.html" %}
+{% block title %}Scoreboard — SOC Dashboard{% endblock %}
+{% block content %}
+
+<!-- Your Performance -->
+<div class="row g-3 mb-3">
+    <div class="col-md-3">
+        <div class="card border-info text-center">
+            <div class="card-body py-3">
+                <div class="fs-2 fw-bold text-info">{{ user_stats.total_attempts }}</div>
+                <small class="text-muted">Total Attempts</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-success text-center">
+            <div class="card-body py-3">
+                <div class="fs-2 fw-bold text-success">{{ user_stats.accuracy }}%</div>
+                <small class="text-muted">Decision Accuracy</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-warning text-center">
+            <div class="card-body py-3">
+                <div class="fs-2 fw-bold text-warning">{{ user_stats.avg_time }}s</div>
+                <small class="text-muted">Avg. Response Time</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-primary text-center">
+            <div class="card-body py-3">
+                <div class="fs-2 fw-bold text-primary">{{ user_stats.quiz_correct }}/{{ user_stats.quiz_total }}</div>
+                <small class="text-muted">Quiz Score</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3">
+    <!-- Leaderboard -->
+    <div class="col-md-5">
+        <div class="card border-warning">
+            <div class="card-header py-2 bg-warning bg-opacity-10">
+                <small class="fw-bold"><i class="bi bi-trophy me-1"></i>Leaderboard</small>
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-dark table-sm table-hover mb-0">
+                    <thead><tr><th>#</th><th>Analyst</th><th>Correct</th><th>Accuracy</th><th>Avg Time</th></tr></thead>
+                    <tbody>
+                    {% for entry in leaderboard %}
+                    <tr {% if entry.username == current_user.username %}class="table-info"{% endif %}>
+                        <td>
+                            {% if loop.index == 1 %}<i class="bi bi-trophy-fill text-warning"></i>
+                            {% elif loop.index == 2 %}<i class="bi bi-trophy-fill text-secondary"></i>
+                            {% elif loop.index == 3 %}<i class="bi bi-trophy-fill" style="color:#cd7f32"></i>
+                            {% else %}{{ loop.index }}{% endif %}
+                        </td>
+                        <td>{{ entry.display_name }}</td>
+                        <td><span class="badge bg-success">{{ entry.correct }}/{{ entry.total_attempts }}</span></td>
+                        <td>{{ entry.accuracy }}%</td>
+                        <td>{{ entry.avg_time|int }}s</td>
+                    </tr>
+                    {% endfor %}
+                    {% if not leaderboard %}
+                    <tr><td colspan="5" class="text-center text-muted py-3">No results yet. Start triaging alerts!</td></tr>
+                    {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent History -->
+    <div class="col-md-7">
+        <div class="card">
+            <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                <small class="fw-bold"><i class="bi bi-clock-history me-1"></i>Your Recent Results</small>
+                <a href="{{ url_for('generate_pdf') }}" class="btn btn-outline-info btn-sm" target="_blank">
+                    <i class="bi bi-file-earmark-pdf me-1"></i>Download Report
+                </a>
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-dark table-sm table-hover mb-0">
+                    <thead><tr><th>Alert</th><th>Difficulty</th><th>Decision</th><th>Time</th><th>Quiz</th><th>Date</th></tr></thead>
+                    <tbody>
+                    {% for r in history[:20] %}
+                    <tr>
+                        <td><small>{{ r.alert_title }}</small></td>
+                        <td><span class="badge bg-{{ {'Easy':'success','Medium':'warning','Hard':'danger'}.get(r.difficulty,'secondary') }}">{{ r.difficulty }}</span></td>
+                        <td>
+                            {% if r.is_both_correct %}
+                            <span class="badge bg-success"><i class="bi bi-check-lg"></i> Correct</span>
+                            {% else %}
+                            <span class="badge bg-danger"><i class="bi bi-x-lg"></i> Incorrect</span>
+                            {% endif %}
+                        </td>
+                        <td><small>{{ r.time_spent_seconds }}s</small></td>
+                        <td><small>{{ r.quiz_score }}/{{ r.quiz_total }}</small></td>
+                        <td><small class="text-muted">{{ r.created_at[:16] }}</small></td>
+                    </tr>
+                    {% endfor %}
+                    {% if not history %}
+                    <tr><td colspan="6" class="text-center text-muted py-3">No results yet. Go triage some alerts!</td></tr>
+                    {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

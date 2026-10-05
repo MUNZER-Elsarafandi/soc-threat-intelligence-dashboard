@@ -1,0 +1,217 @@
+{# Alerts List — all 15 scenarios with three filters (severity, status, difficulty) and a Reset All button. Click a row to expand an inline preview, click the eye icon to open the full detail page. #}
+{% extends "base.html" %}
+{% block title %}Alerts{% endblock %}
+
+{% block content %}
+{# Banner showing how many alerts the current user has in progress #}
+{% set assigned = [] %}
+{% for a in alerts if a.assignee != 'None' and a.status == 'In Progress' %}
+    {% if assigned.append(a) %}{% endif %}
+{% endfor %}
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <strong class="small">Assigned Alert</strong>
+        {% if assigned %}
+        <div class="text-info small mt-1">You have {{ assigned|length }} alert(s) assigned to you.</div>
+        {% else %}
+        <div class="text-warning small mt-1">You haven't picked up any alerts! Assign yourself to an alert and start the triage!</div>
+        {% endif %}
+    </div>
+</div>
+
+{# Filter row: severity, status, difficulty + Reset All button #}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h5 class="mb-0">Security Alerts</h5>
+    <div class="d-flex gap-2 align-items-center">
+        <form method="POST" action="{{ url_for('reset_all') }}" onsubmit="return confirm('Reset all alerts back to Awaiting Action?')">
+            <button type="submit" class="btn btn-outline-warning btn-sm">
+                <i class="bi bi-arrow-counterclockwise me-1"></i>Reset All
+            </button>
+        </form>
+        <select id="filterSeverity" class="form-select form-select-sm bg-dark text-light border-secondary" style="width:auto;" onchange="applyFilters()">
+            <option value="">All Severities</option>
+            <option value="Critical" {% if request.args.get('severity')=='Critical' %}selected{% endif %}>Critical</option>
+            <option value="High" {% if request.args.get('severity')=='High' %}selected{% endif %}>High</option>
+            <option value="Medium" {% if request.args.get('severity')=='Medium' %}selected{% endif %}>Medium</option>
+            <option value="Low" {% if request.args.get('severity')=='Low' %}selected{% endif %}>Low</option>
+        </select>
+        <select id="filterStatus" class="form-select form-select-sm bg-dark text-light border-secondary" style="width:auto;" onchange="applyFilters()">
+            <option value="">All Statuses</option>
+            <option value="Awaiting Action" {% if request.args.get('status')=='Awaiting Action' %}selected{% endif %}>Awaiting Action</option>
+            <option value="In Progress" {% if request.args.get('status')=='In Progress' %}selected{% endif %}>In Progress</option>
+            <option value="Closed" {% if request.args.get('status')=='Closed' %}selected{% endif %}>Closed</option>
+        </select>
+        <select id="filterDifficulty" class="form-select form-select-sm bg-dark text-light border-secondary" style="width:auto;" onchange="applyFilters()">
+            <option value="">All Levels</option>
+            <option value="Easy" {% if request.args.get('difficulty')=='Easy' %}selected{% endif %}>Easy</option>
+            <option value="Medium" {% if request.args.get('difficulty')=='Medium' %}selected{% endif %}>Medium</option>
+            <option value="Hard" {% if request.args.get('difficulty')=='Hard' %}selected{% endif %}>Hard</option>
+        </select>
+    </div>
+</div>
+
+{# Main alerts table — each row is clickable to expand a preview #}
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-dark table-hover table-sm mb-0">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Name</th>
+                    <th>Severity</th>
+                    <th>Difficulty</th>
+                    <th>Status</th>
+                    <th>Verdict</th>
+                    <th>Assignee</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for alert in alerts %}
+                <tr class="alert-row" data-alert-id="{{ alert.id }}" onclick="toggleExpand(this)" style="cursor:pointer;">
+                    <td class="text-muted small">{{ alert.created_at.strftime('%b %d, %H:%M') }}</td>
+                    <td>{{ alert.title }}</td>
+                    <td><span class="badge bg-{{ alert.severity_color() }}">{{ alert.severity }}</span></td>
+                    <td><span class="badge bg-{{ alert.difficulty_color() }}">{{ alert.difficulty }}</span></td>
+                    <td><span class="badge bg-{{ alert.status_color() }}">{{ alert.status }}</span></td>
+                    <td>
+                        {% if alert.verdict == 'True Positive' %}
+                        <span class="badge bg-success"><i class="bi bi-check-lg me-1"></i>True Positive</span>
+                        {% elif alert.verdict == 'False Positive' %}
+                        <span class="badge bg-danger"><i class="bi bi-x-lg me-1"></i>False Positive</span>
+                        {% else %}
+                        <span class="text-muted small">None</span>
+                        {% endif %}
+                    </td>
+                    <td class="small">{{ alert.assignee if alert.assignee != 'None' else '' }}</td>
+                    <td onclick="event.stopPropagation();">
+                        <a href="{{ url_for('alert_detail', alert_id=alert.id) }}" class="btn btn-outline-info btn-sm py-0 px-1 me-1" title="View Details">
+                            <i class="bi bi-eye"></i>
+                        </a>
+                        <button class="btn btn-outline-secondary btn-sm py-0 px-1" onclick="openEditModal({{ alert.id }}, '{{ alert.title }}', '{{ alert.status }}', '{{ alert.verdict }}', '{{ alert.severity }}', '{{ alert.assignee }}')" title="Edit Alert">
+                            <i class="bi bi-pencil"></i>
+                        </button>
+                    </td>
+                </tr>
+                {# Expanded preview shown when the user clicks a row #}
+                <tr class="expand-row" id="expand-{{ alert.id }}" style="display:none;">
+                    <td colspan="7" class="py-3 px-4" style="background:#0d1117;">
+                        <div class="row">
+                            <div class="col-md-8">
+                                <table class="table table-sm table-borderless mb-0">
+                                    <tr><td class="text-muted fw-bold" style="width:140px;">Description:</td><td class="small">{{ alert.description }}</td></tr>
+                                    {% if alert.source_ip %}<tr><td class="text-muted fw-bold">Source IP:</td><td class="font-monospace small">{{ alert.source_ip }}</td></tr>{% endif %}
+                                    {% if alert.destination_ip %}<tr><td class="text-muted fw-bold">Destination IP:</td><td class="font-monospace small">{{ alert.destination_ip }}</td></tr>{% endif %}
+                                    {% if alert.file_hash %}<tr><td class="text-muted fw-bold">File Hash:</td><td class="font-monospace small">{{ alert.file_hash }}</td></tr>{% endif %}
+                                    {% if alert.cve_id %}<tr><td class="text-muted fw-bold">CVE:</td><td class="small">{{ alert.cve_id }}</td></tr>{% endif %}
+                                    {% if alert.mitre_technique_id %}<tr><td class="text-muted fw-bold">MITRE Technique:</td><td class="small">{{ alert.mitre_technique_id }} — {{ alert.mitre_technique_name }}</td></tr>{% endif %}
+                                </table>
+                            </div>
+                            <div class="col-md-4 text-end">
+                                <a href="{{ url_for('alert_detail', alert_id=alert.id) }}" class="btn btn-info btn-sm">
+                                    <i class="bi bi-eye me-1"></i>Full Analysis
+                                </a>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="card-footer py-1 text-muted small">
+        Displaying {{ alerts|length }} alerts
+    </div>
+</div>
+
+{# Quick-edit modal triggered by the pencil icon (legacy quick-action) #}
+<div class="modal fade" id="editModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content bg-dark border-secondary">
+            <div class="modal-header border-secondary py-2">
+                <h6 class="modal-title">Edit Alert</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="editForm" method="POST">
+                <input type="hidden" name="action" value="save_edit">
+                <div class="modal-body">
+                    <p class="fw-bold small mb-3" id="modalAlertTitle"></p>
+                    <div class="row g-3">
+                        <div class="col-6">
+                            <label class="form-label small text-muted">Status</label>
+                            <select name="status" id="modalStatus" class="form-select form-select-sm bg-dark text-light border-secondary">
+                                <option value="Awaiting Action">Awaiting Action</option>
+                                <option value="In Progress">In Progress</option>
+                                <option value="Closed">Closed</option>
+                            </select>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small text-muted">Verdict</label>
+                            <select name="verdict" id="modalVerdict" class="form-select form-select-sm bg-dark text-light border-secondary">
+                                <option value="None">None</option>
+                                <option value="True Positive">True Positive</option>
+                                <option value="False Positive">False Positive</option>
+                            </select>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small text-muted">Severity</label>
+                            <select id="modalSeverity" class="form-select form-select-sm bg-dark text-light border-secondary" disabled>
+                                <option>Critical</option><option>High</option><option>Medium</option><option>Low</option>
+                            </select>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small text-muted">Assignee</label>
+                            <select id="modalAssignee" class="form-select form-select-sm bg-dark text-light border-secondary" disabled>
+                                <option>None</option><option>You (L1)</option>
+                            </select>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label small text-muted">Analyst Comment</label>
+                            <textarea name="comment" id="modalComment" class="form-control form-control-sm bg-dark text-light border-secondary" rows="3" placeholder="Write your analysis..."></textarea>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer border-secondary py-2">
+                    <button type="submit" class="btn btn-success btn-sm">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+{# Build query string from the three dropdowns and reload the page #}
+function applyFilters() {
+    const s = document.getElementById('filterSeverity').value;
+    const st = document.getElementById('filterStatus').value;
+    const d = document.getElementById('filterDifficulty').value;
+    let url = '{{ url_for("alerts_list") }}?';
+    if (s) url += 'severity=' + s + '&';
+    if (st) url += 'status=' + st + '&';
+    if (d) url += 'difficulty=' + d;
+    window.location.href = url;
+}
+
+{# Toggle the expanded preview row when a user clicks an alert #}
+function toggleExpand(row) {
+    const id = row.dataset.alertId;
+    const expandRow = document.getElementById('expand-' + id);
+    // Hide all other expanded rows
+    document.querySelectorAll('.expand-row').forEach(r => {
+        if (r.id !== 'expand-' + id) r.style.display = 'none';
+    });
+    expandRow.style.display = expandRow.style.display === 'none' ? '' : 'none';
+}
+
+function openEditModal(id, title, status, verdict, severity, assignee) {
+    document.getElementById('editForm').action = '/alert/' + id + '/update';
+    document.getElementById('modalAlertTitle').textContent = title;
+    document.getElementById('modalStatus').value = status;
+    document.getElementById('modalVerdict').value = verdict;
+    document.getElementById('modalSeverity').value = severity;
+    document.getElementById('modalAssignee').value = assignee === 'None' ? 'None' : assignee;
+    document.getElementById('modalComment').value = '';
+    new bootstrap.Modal(document.getElementById('editModal')).show();
+}
+</script>
+{% endblock %}
